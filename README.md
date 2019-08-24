@@ -1,13 +1,15 @@
-# CMPS-3240-Prediction-ARM
+# CMPS 3240 Lab: Experimenting with the branch predictor on AWS Gravitron processors
 A simple experiment to test the branch predictor on AWS Gravitron processors
 
 ## Background
 
-Branch prediction is an optimization to reduce delays due to stalls. Contemporary processors often employ pipelining, which is particularly sensitive to stalls--especially ones that may cause a flush. *Branch prediction* is a hardware-level implementation on the micrprocessor that attempts to predict if a branch will be taken or not. Ussually, the scheme for branch prediction is decided at the implementation-level by the microprocessor manufacturer. For example, older AMD processors used a neural network for branch prediction. The textbook covers simple policies such as always-predict-taken, etc. These are called *static predictors*. Static predictors work OK in constrained scenarios, when the compiler or developer knows the processor will always make a prediction in a particular way, and most of the code contains loops that often take the same path. We desire a better prediction system.
+Branch prediction is an optimization to reduce delays due to stalls. Contemporary processors often employ pipelining, which is particularly sensitive to stalls--especially ones that may cause a flush when the wrong prediction is made. *Branch prediction* is a hardware-level implementation on the micrprocessor that attempts to predict if a branch will be taken or not. Usually, the scheme for branch prediction is decided at the implementation-level by the microprocessor manufacturer. The complexity of the branch prediction system can vary.
 
-The testbook also covers 2-bit saturating counters, where the processor maintains a counter to remember if the branch being considered was taken or not taken. The processor may make a mistake at first. However, the processor can converge to taken (T) or not taken (NT). This removes the requirement of the compiler or developer having to refactor their loops in a particular way (pre-test or post-test). 
+The processor can have a default policy, to either predict the branch is taken or not taken. For example, in the Hennessy and Patterson textbook, MIPS has a default not taken policy. These are called *static predictors*. This requires the compiler or developer to know this, and to always factor their loops in a particular way. This may be too strict of a requirement. And, this simple predictor will have trouble with loops that do not always take a consistent path.
 
-Current processors often combine counters with a *branch target buffer*. The branch target buffer is a sort of cache that records a hash of the instruction address with a history of previous branch behavior (T or NT):
+The textbook also covers 2-bit saturating counters, where the processor maintains a counter to remember if the branch being considered was taken or not taken. Generally, this method is based on the idea that the processor needs to remember if this specific branch was taken (T) or not taken (NT). When first executing a branch, an arbitrary decision is made, but the path taken (T or NT) is logged. Upon revisiting this branch, the processor will consider the history of paths taken and make the decision from that. For example, if the processor remembers that the branch was T for the past two executions, it makes sense to continue guessing T.
+
+Current processors often combine counters with a *branch target buffer* (BTB). The branch target buffer is a sort of cache that records a hash of the instruction address with a history of previous branch behavior (T or NT):
 
 { Some function of the instruction address, History of T or NT }
 
@@ -17,17 +19,72 @@ The first element is the index. For example, consider the following code:
 0x04 cmp w0, 5
 0x08 beq loopquit
 ...
-0x3C loopquit: 
+0x3C loopquit:
 ```
 
-When first executing line 0x08, the processor would consult the branch table buffer to determine if the branch has been seen before. It would consult the index at some function of 0x04. If it has previously made a prediction, it uses some scheme (such as 2-bit saturating counter) to make a prediction. If it has not seen the instruction yet (there is no history) some arbitrary decision is made. 
+When first executing line 0x08, the processor would consult the branch table buffer to determine if the branch has been seen before. It would consult the index at some function of 0x04. If it has previously made a prediction, it uses some scheme (such as 2-bit saturating counter) to make a prediction. If it has not seen the instruction yet (there is no history) some arbitrary decision is made.
 
 ## ARM Gravitron Prediction Unit
 
-*Prediction unit* is the term for the overall system for branch prediction. The processor on the departmental server is an Amazon AWS Gravitron processor, which is a repackaged Alpine AL73400 processor that contains ARM Cortex A72 cores.<sup>3</sup> A technical schematic is found here.<sup>2</sup> 
+*Prediction unit* is the term for the overall system for branch prediction. The processor on the departmental server is an Amazon AWS Gravitron processor, which is a repackaged Alpine AL73400 processor that contains ARM Cortex A72 cores.<sup>3</sup> A technical schematic is found here, where you can see that the processor has a BTB.<sup>2</sup>
+
+However, the specific algorithm for BTB operation is unknown. This is mostly a trade-secret issue--branch delay optimization is a very important part of processor design; and security. Some paths of execution may contain sensitive operations or data, and its inner workings should be inaccessible and unknown.
+
+Thus, if you want to test the branch prediction performance of a processor you have to create a benchmark program which arbitrarily takes branches, does not take branches, or makes roughly random decisions. There are plenty of examples of this with x86 processors<sup>4</sup>, but ARM and Linux is kind of a new thing and there is not a comprehensive guide for this. The purpose of this lab is to design programs that do one of the three cases, to test the time it takes to complete the task, and to speculate on the design of the prediction unit.
+
+## Approach
+
+### Part 1 - To take, or not to take, that is the question
+
+Whether 'tis nobler in the core to suffer the cycles and delays of inaction, or to wildly speculate on unoptimized code generated by the compiler. Oh, Hamlet, prithee clone this repository and runneth Make:
+
+```bash
+$ git clone https://github.com/DrAlbertCruz/CMPS-3240-Prediction-ARM.git
+...
+$ cd CMPS-3240-Prediction-ARM
+...
+$ make
+```
+
+There are two files that are generated from the same general function. `faxpyPre.s` and its output `faxpyPre.out` generate a pre-test loop for `faxpy()` on a very large array. `faxpyPost.s` and its output `faxpyPost.out` are similar, but they are post-test. Execute both and time three trials for each. Is there a difference?
+
+### Part 2 - Varied Path
+
+Part 1 presented a task that was either mostly T or mostly NT. In the following, we will test a procedure that has varied paths, and if implementing the non-base case as the fall through has an impact on execution. This code is not given to you.  Complete the following:
+
+1. Implement a recursive Fibonacci function `fib(n)` that returns the n-th Fibnacci number. It must be recursive. If you previous lab's code works, feel free to reuse it here. Implement the base cases as the fall through:
+
+```arm
+cmp x0, 1
+bge _recursiveOp
+#Code to return n here
+```
+
+2. Implement a different version that has the non-base case as the fall through:
+
+```arm
+cmp x0, 1
+blt _return1
+#Code to return fib(n-2) + fib(n-1)
+```
+
+Compile and time these results for three trials.
+
+## Check-off
+
+For full credit, submit a write-up to Moodle that contains answers to the following questions:
+
+1. Cut and paste the timing results for `faxpyPre.out` here, for three trials.
+2. Cut and paste the timing results for `faxpyPost.out` here, for three trials.
+3. Is there a difference or not? Is this in line with your expectation
+4. Cut and paste the timing results for `fib(n)` with a base-case fallthrough here, for three trials.
+5. Cut and paste the timing results for `fib(n)` with a non-base-case fallthrough here, for three trials.
+6. Are the `fib()` results different from `faxpy()` result? Why should they be different in general?
+7. For an execution of `fib(n)` which happens more often? T or NT? What conclusions can you draw about the prediction unit?
 
 ## References
 
 <sup>1</sup>http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.100095_0001_02_en/way1382448709518.html
 <sup>2</sup>https://www.tomshardware.com/reviews/arm-cortex-a72-architecture,4424.html#p2
 <sup>3</sup>https://en.wikichip.org/wiki/annapurna_labs/alpine/al73400
+<sup>4</sup>https://www.agner.org/optimize/microarchitecture.pdf
